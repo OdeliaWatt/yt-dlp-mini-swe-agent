@@ -1,0 +1,101 @@
+name: Test and lint workflows
+on:
+  push:
+    branches: ['master']
+  # This workflow contains required checks and needs to run for EVERY pull_request
+  pull_request:
+    branches: ['**']
+
+permissions: {}
+
+concurrency:
+  group: test-workflows-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  ACTIONLINT_VERSION: "1.7.12"
+  ACTIONLINT_SHA256SUM: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+  ACTIONLINT_REPO: rhysd/actionlint
+  GH_TELEMETRY: "false"
+
+
+jobs:
+  check:
+    name: Check workflows
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: read
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.14'
+
+      - name: Install uv
+        run: |
+          set -euo pipefail
+          python -m pip install --require-hashes -r bundle/requirements/uv.txt
+
+      - name: Install Python dependencies
+        run: |
+          set -euo pipefail
+          uv pip install --system --require-hashes \
+            -r bundle/requirements/static-analysis.txt \
+            -r bundle/requirements/test.txt
+
+      - name: Install ShellCheck
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends shellcheck
+
+      - name: Install actionlint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          install_dir="${RUNNER_TEMP}/actionlint"
+          mkdir -p "${install_dir}"
+          gh release download "v${ACTIONLINT_VERSION}" \
+            --repo "${ACTIONLINT_REPO}" \
+            --pattern "${archive}" \
+            --dir "${install_dir}"
+          gh attestation verify "${install_dir}/${archive}" \
+            --repo "${ACTIONLINT_REPO}"
+          echo "${ACTIONLINT_SHA256SUM}  ${install_dir}/${archive}" | sha256sum --check --strict -
+          tar -xzf "${install_dir}/${archive}" -C "${install_dir}" actionlint
+          sudo install -m 0755 "${install_dir}/actionlint" /usr/local/bin/actionlint
+
+      - name: Run actionlint
+        run: actionlint
+
+      - name: Run ShellCheck
+        run: shellcheck bundle/docker/linux/*.sh
+
+      - name: Test setup variables
+        run: python -m pytest -Werror devscripts/setup_variables_tests.py
+
+  zizmor:
+    name: Run zizmor
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@e639db99335bc9038abc0e066dfcd72e23d26fb4 # v0.3.0
+        with:
+          advanced-security: false
+          persona: auditor
