@@ -1,0 +1,87 @@
+name: Quick Test
+on:
+  push:
+    branches: ['master']
+  # This workflow contains required checks and needs to run for EVERY pull_request
+  pull_request:
+    branches: ['**']
+
+permissions: {}
+
+concurrency:
+  group: quick-test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+
+jobs:
+  tests:
+    name: Core test
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    if: >-
+      !contains(github.event.head_commit.message, '[skip ci]')
+      && !contains(github.event.head_commit.message, '[ci skip]')
+      && !contains(github.event.head_commit.message, '[no ci]')
+      && !contains(github.event.head_commit.message, '[skip actions]')
+      && !contains(github.event.head_commit.message, '[actions skip]')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade --require-hashes -r bundle/requirements/pip.txt
+          python -m pip install --upgrade --require-hashes -r bundle/requirements/test.txt
+      - name: Show project diagnostics
+        continue-on-error: true
+        run: python -m yt_dlp -v || true
+      - name: Run core tests
+        run: python -m devscripts.run_tests --pytest-args="--reruns 3"
+  check:
+    name: Code check
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    if: >-
+      !contains(github.event.head_commit.message, '[skip ci]')
+      && !contains(github.event.head_commit.message, '[ci skip]')
+      && !contains(github.event.head_commit.message, '[no ci]')
+      && !contains(github.event.head_commit.message, '[skip actions]')
+      && !contains(github.event.head_commit.message, '[actions skip]')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade --require-hashes -r bundle/requirements/pip.txt
+          python -m pip install --upgrade --require-hashes -r bundle/requirements/static-analysis.txt
+      - name: Generate lazy extractors
+        run: python devscripts/make_lazy_extractors.py
+      - name: Lint
+        run: ruff check --output-format=github .
+      - name: Show formatting diff
+        if: always()
+        run: autopep8 --diff .
+      - name: Check file modes
+        shell: bash
+        run: |
+          set -o pipefail
+          git ls-files -s yt_dlp | awk '
+            $1 != "100644" {
+              printf "::error file=%s::Unexpected file mode %s; expected 100644\n", $4, $1
+              bad = 1
+            }
+            END { exit bad }
+          '
